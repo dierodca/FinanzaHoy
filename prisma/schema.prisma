@@ -1,0 +1,289 @@
+// ============================================================
+// FinanzaHoy — Esquema Prisma (15 tablas)
+// PostgreSQL (Neon serverless) — Vercel deployment
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── NEGOCIO (entidad central) ───────────────────────────────
+model Negocio {
+  id              String   @id @default(cuid())
+  nombreComercial String
+  nit             String?
+  tipoActividad   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  usuarios       Usuario[]
+  productos      Producto[]
+  clientes       Cliente[]
+  ventas         Venta[]
+  gastos         Gasto[]
+  arqueosCaja    ArqueoCaja[]
+  metasVentas    MetaVenta[]
+
+  @@map("negocios")
+}
+
+// ─── USUARIOS ────────────────────────────────────────────────
+model Usuario {
+  id            String   @id @default(cuid())
+  negocioId     String
+  nombreCompleto String
+  email         String   @unique
+  passwordHash  String
+  rol           Rol      @default(VENDEDOR)
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  negocio      Negocio      @relation(fields: [negocioId], references: [id])
+  ventas       Venta[]
+  gastos       Gasto[]
+  arqueosCaja  ArqueoCaja[]
+  abonosFiado  AbonoFiado[]
+
+  @@map("usuarios")
+}
+
+enum Rol {
+  ADMIN
+  VENDEDOR
+}
+
+// ─── CATEGORÍAS DE PRODUCTO ──────────────────────────────────
+model CategoriaProducto {
+  id        String     @id @default(cuid())
+  nombre    String
+  createdAt DateTime   @default(now())
+
+  productos Producto[]
+
+  @@map("categorias_producto")
+}
+
+// ─── PRODUCTOS ───────────────────────────────────────────────
+model Producto {
+  id          String    @id @default(cuid())
+  negocioId   String
+  categoriaId String?
+  nombre      String
+  descripcion String?
+  costoCompra Decimal   @db.Decimal(12, 2)
+  precioVenta Decimal   @db.Decimal(12, 2)
+  stock       Int       @default(0)
+  activo      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  negocio    Negocio            @relation(fields: [negocioId], references: [id])
+  categoria  CategoriaProducto? @relation(fields: [categoriaId], references: [id])
+  detalles   DetalleVenta[]
+
+  @@map("productos")
+}
+
+// ─── CLIENTES ────────────────────────────────────────────────
+model Cliente {
+  id            String   @id @default(cuid())
+  negocioId     String
+  nombreCompleto String
+  telefono      String?
+  direccion     String?
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  negocio Negocio @relation(fields: [negocioId], references: [id])
+  ventas  Venta[]
+  fiados  Fiado[]
+
+  @@map("clientes")
+}
+
+// ─── MEDIOS DE PAGO ──────────────────────────────────────────
+model MedioPago {
+  id        String   @id @default(cuid())
+  nombre    String   @unique
+  icono     String?
+  createdAt DateTime @default(now())
+
+  ventas               Venta[]
+  abonosFiado          AbonoFiado[]
+  arqueoDetalleMedios  ArqueoDetalleMedio[]
+
+  @@map("medios_pago")
+}
+
+// ─── VENTAS ──────────────────────────────────────────────────
+model Venta {
+  id          String      @id @default(cuid())
+  negocioId   String
+  usuarioId   String
+  clienteId   String?
+  medioPagoId String
+  total       Decimal     @db.Decimal(12, 2)
+  subtotal    Decimal     @db.Decimal(12, 2)
+  descuento   Decimal     @default(0) @db.Decimal(12, 2)
+  estado      EstadoVenta @default(COMPLETADA)
+  nota        String?
+  createdAt   DateTime    @default(now())
+
+  negocio  Negocio      @relation(fields: [negocioId], references: [id])
+  usuario  Usuario      @relation(fields: [usuarioId], references: [id])
+  cliente  Cliente?     @relation(fields: [clienteId], references: [id])
+  medioPago MedioPago  @relation(fields: [medioPagoId], references: [id])
+  detalles DetalleVenta[]
+  fiado    Fiado?
+
+  @@map("ventas")
+}
+
+enum EstadoVenta {
+  COMPLETADA
+  ANULADA
+  PENDIENTE
+}
+
+// ─── DETALLE DE VENTAS ───────────────────────────────────────
+model DetalleVenta {
+  id             String  @id @default(cuid())
+  ventaId        String
+  productoId     String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  subtotal       Decimal @db.Decimal(12, 2)
+
+  venta    Venta    @relation(fields: [ventaId], references: [id])
+  producto Producto @relation(fields: [productoId], references: [id])
+
+  @@map("detalle_ventas")
+}
+
+// ─── FIADOS (cartera) ────────────────────────────────────────
+model Fiado {
+  id             String      @id @default(cuid())
+  negocioId      String      // denormalizado para queries directas
+  clienteId      String
+  ventaId        String?     @unique
+  montoOriginal  Decimal     @db.Decimal(12, 2)
+  saldoPendiente Decimal     @db.Decimal(12, 2)
+  fechaVencimiento DateTime?
+  estado         EstadoFiado @default(PENDIENTE)
+  nota           String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  cliente  Cliente      @relation(fields: [clienteId], references: [id])
+  venta    Venta?       @relation(fields: [ventaId], references: [id])
+  abonos   AbonoFiado[]
+
+  @@map("fiados")
+}
+
+enum EstadoFiado {
+  PENDIENTE
+  ABONADO
+  PAGADO
+}
+
+// ─── ABONOS A FIADO ──────────────────────────────────────────
+model AbonoFiado {
+  id          String   @id @default(cuid())
+  fiadoId     String
+  usuarioId   String
+  medioPagoId String
+  monto       Decimal  @db.Decimal(12, 2)
+  nota        String?
+  createdAt   DateTime @default(now())
+
+  fiado     Fiado     @relation(fields: [fiadoId], references: [id])
+  usuario   Usuario   @relation(fields: [usuarioId], references: [id])
+  medioPago MedioPago @relation(fields: [medioPagoId], references: [id])
+
+  @@map("abonos_fiado")
+}
+
+// ─── CATEGORÍAS DE GASTO ─────────────────────────────────────
+model CategoriaGasto {
+  id        String   @id @default(cuid())
+  nombre    String
+  color     String?
+  icono     String?
+  createdAt DateTime @default(now())
+
+  gastos Gasto[]
+
+  @@map("categorias_gasto")
+}
+
+// ─── GASTOS ──────────────────────────────────────────────────
+model Gasto {
+  id          String   @id @default(cuid())
+  negocioId   String
+  usuarioId   String
+  categoriaId String
+  concepto    String
+  monto       Decimal  @db.Decimal(12, 2)
+  fecha       DateTime @default(now())
+  nota        String?
+  createdAt   DateTime @default(now())
+
+  negocio   Negocio        @relation(fields: [negocioId], references: [id])
+  usuario   Usuario        @relation(fields: [usuarioId], references: [id])
+  categoria CategoriaGasto @relation(fields: [categoriaId], references: [id])
+
+  @@map("gastos")
+}
+
+// ─── ARQUEO DE CAJA ──────────────────────────────────────────
+model ArqueoCaja {
+  id             String   @id @default(cuid())
+  negocioId      String
+  usuarioId      String
+  montoEsperado  Decimal  @db.Decimal(12, 2)
+  montoFisico    Decimal  @db.Decimal(12, 2)
+  diferencia     Decimal  @db.Decimal(12, 2)
+  observacion    String?
+  fecha          DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  negocio  Negocio              @relation(fields: [negocioId], references: [id])
+  usuario  Usuario              @relation(fields: [usuarioId], references: [id])
+  detalles ArqueoDetalleMedio[]
+
+  @@map("arqueos_caja")
+}
+
+// ─── ARQUEO DETALLE POR MEDIO DE PAGO ────────────────────────
+model ArqueoDetalleMedio {
+  id        String  @id @default(cuid())
+  arqueoId  String
+  medioPagoId String
+  monto     Decimal @db.Decimal(12, 2)
+
+  arqueo    ArqueoCaja @relation(fields: [arqueoId], references: [id])
+  medioPago MedioPago  @relation(fields: [medioPagoId], references: [id])
+
+  @@map("arqueo_detalle_medios")
+}
+
+// ─── METAS DE VENTA ──────────────────────────────────────────
+model MetaVenta {
+  id         String   @id @default(cuid())
+  negocioId  String
+  periodo    String   // "2026-10" formato YYYY-MM
+  montoMeta  Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+
+  negocio Negocio @relation(fields: [negocioId], references: [id])
+
+  @@unique([negocioId, periodo])
+  @@map("metas_ventas")
+}
