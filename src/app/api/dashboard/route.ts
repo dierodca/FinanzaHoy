@@ -1,10 +1,8 @@
 export const dynamic = "force-dynamic";
 // app/api/dashboard/route.ts
-// Datos consolidados para el Dashboard principal
-
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { startOfDay, endOfDay, subDays, startOfWeek } from "date-fns";
+import { startOfDay, endOfDay, subDays, startOfWeek, format } from "date-fns";
 
 const NEGOCIO_ID = process.env.DEMO_NEGOCIO_ID ?? "negocio-demo-001";
 
@@ -26,10 +24,9 @@ export async function GET() {
       },
       include: { medioPago: true },
     });
-
     const totalVentasHoy = ventasHoy.reduce((s, v) => s + Number(v.total), 0);
 
-    // ── Ventas de ayer (para comparación) ─────────────────────
+    // ── Ventas de ayer ─────────────────────────────────────────
     const ventasAyer = await prisma.venta.findMany({
       where: {
         negocioId: NEGOCIO_ID,
@@ -51,7 +48,7 @@ export async function GET() {
     // ── Ganancia neta ─────────────────────────────────────────
     const gananciaNeta = totalVentasHoy - totalGastosHoy;
 
-    // ── Cartera vencida (semáforo rojo: >15 días) ─────────────
+    // ── Cartera vencida (>15 días) ────────────────────────────
     const fiadosVencidos = await prisma.fiado.findMany({
       where: {
         negocioId: NEGOCIO_ID,
@@ -64,39 +61,54 @@ export async function GET() {
       0
     );
 
-    // ── Ventas por día (últimos 7 días) ───────────────────────
-    const ventasSemana = await prisma.$queryRaw<
-      Array<{ dia: string; total: number }>
-    >`
-      SELECT 
-        DATE(created_at) as dia,
-        SUM(total)::float as total
-      FROM ventas
-      WHERE negocio_id = ${NEGOCIO_ID}
-        AND estado = 'COMPLETADA'
-        AND created_at >= ${inicioSemana}
-      GROUP BY DATE(created_at)
-      ORDER BY dia ASC
-    `;
+    // ── Ventas por día (últimos 7 días) usando Prisma ORM ─────
+    const ventasSemanaRaw = await prisma.venta.findMany({
+      where: {
+        negocioId: NEGOCIO_ID,
+        estado: "COMPLETADA",
+        createdAt: { gte: inicioSemana },
+      },
+      select: { createdAt: true, total: true },
+    });
 
-    // ── Top 5 productos ───────────────────────────────────────
-    const topProductos = await prisma.$queryRaw<
-      Array<{ nombre: string; total: number; unidades: number }>
-    >`
-      SELECT 
-        p.nombre,
-        SUM(dv.subtotal)::float as total,
-        SUM(dv.cantidad)::int as unidades
-      FROM detalle_ventas dv
-      JOIN productos p ON p.id = dv.producto_id
-      JOIN ventas v ON v.id = dv.venta_id
-      WHERE v.negocio_id = ${NEGOCIO_ID}
-        AND v.estado = 'COMPLETADA'
-        AND v.created_at >= ${startOfDay(subDays(hoy, 7))}
-      GROUP BY p.id, p.nombre
-      ORDER BY total DESC
-      LIMIT 5
-    `;
+    // Agrupar por día en memoria
+    const ventasPorDia = ventasSemanaRaw.reduce<Record<string, number>>((acc, v) => {
+      const dia = format(new Date(v.createdAt), "yyyy-MM-dd");
+      acc[dia] = (acc[dia] ?? 0) + Number(v.total);
+      return acc;
+    }, {});
+
+    const ventasSemana = Object.entries(ventasPorDia)
+      .map(([dia, total]) => ({ dia, total }))
+      .sort((a, b) => a.dia.localeCompare(b.dia));
+
+    // ── Top 5 productos (últimos 7 días) usando Prisma ORM ────
+    const detalles7dias = await prisma.detalleVenta.findMany({
+      where: {
+        venta: {
+          negocioId: NEGOCIO_ID,
+          estado: "COMPLETADA",
+          createdAt: { gte: startOfDay(subDays(hoy, 7)) },
+        },
+      },
+      include: { producto: { select: { nombre: true } } },
+    });
+
+    const topProductosMap = detalles7dias.reduce<
+      Record<string, { nombre: string; total: number; unidades: number }>
+    >((acc, d) => {
+      const key = d.productoId;
+      if (!acc[key]) {
+        acc[key] = { nombre: d.producto.nombre, total: 0, unidades: 0 };
+      }
+      acc[key].total += Number(d.subtotal);
+      acc[key].unidades += d.cantidad;
+      return acc;
+    }, {});
+
+    const topProductos = Object.values(topProductosMap)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
 
     // ── Arqueo de caja ─────────────────────────────────────────
     const arqueoHoy = await prisma.arqueoCaja.findFirst({
@@ -110,18 +122,15 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    // Calcular desglose por medio de pago de hoy
-    const desgloseMedios = ventasHoy.reduce<Record<string, number>>(
-      (acc, v) => {
-        const nombre = v.medioPago.nombre;
-        acc[nombre] = (acc[nombre] ?? 0) + Number(v.total);
-        return acc;
-      },
-      {}
-    );
+    // Desglose por medio de pago de hoy
+    const desgloseMedios = ventasHoy.reduce<Record<string, number>>((acc, v) => {
+      const nombre = v.medioPago.nombre;
+      acc[nombre] = (acc[nombre] ?? 0) + Number(v.total);
+      return acc;
+    }, {});
 
     // ── Meta del mes ──────────────────────────────────────────
-    const periodo = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}`;
+    const periodo = format(hoy, "yyyy-MM");
     const meta = await prisma.metaVenta.findUnique({
       where: { negocioId_periodo: { negocioId: NEGOCIO_ID, periodo } },
     });
@@ -155,7 +164,7 @@ export async function GET() {
   } catch (error) {
     console.error("Error en /api/dashboard:", error);
     return NextResponse.json(
-      { error: "Error al obtener datos del dashboard" },
+      { error: "Error al obtener datos del dashboard", detail: String(error) },
       { status: 500 }
     );
   }
