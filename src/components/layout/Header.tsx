@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { Bell, Calendar } from "lucide-react";
+import { useEffect, useState } from "react";
 import { formatFechaLarga } from "@/lib/utils";
 
 const PAGE_TITLES: Record<string, string> = {
@@ -16,7 +17,12 @@ const PAGE_TITLES: Record<string, string> = {
 export function Header() {
   const pathname = usePathname();
   const title = PAGE_TITLES[pathname] ?? "FinanzaHoy";
-  const hoy = formatFechaLarga(new Date());
+
+  // Evita hydration mismatch: la fecha solo se renderiza en el cliente
+  const [hoy, setHoy] = useState("");
+  useEffect(() => {
+    setHoy(formatFechaLarga(new Date()));
+  }, []);
 
   return (
     <header className="h-16 bg-white border-b border-gray-200 px-6 flex items-center justify-between shadow-sm">
