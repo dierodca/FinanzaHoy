@@ -25,7 +25,7 @@ interface Producto {
   stock: number;
 }
 
-interface CategoriaProducto {
+interface Categoria {
   id: string;
   nombre: string;
 }
@@ -35,13 +35,41 @@ const FORM_VACIO = {
   costoCompra: "",
   precioVenta: "",
   stock: "0",
-  descripcion: "",
   categoriaId: "",
 };
 
+// Subcomponente: selector de categoría reutilizable
+function SelectCategoria({
+  categorias,
+  value,
+  onChange,
+}: {
+  categorias: Categoria[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <Label>Categoría</Label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full mt-1 h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        <option value="">Sin categoría</option>
+        {categorias.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.nombre}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export default function ProductosPage() {
   const [productos, setProductos] = useState<Producto[]>([]);
-  const [categorias, setCategorias] = useState<CategoriaProducto[]>([]);
+  const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [loading, setLoading] = useState(true);
   const [buscar, setBuscar] = useState("");
 
@@ -55,7 +83,7 @@ export default function ProductosPage() {
   const [formEditar, setFormEditar] = useState(FORM_VACIO);
   const [guardandoEditar, setGuardandoEditar] = useState(false);
 
-  // Modal confirmar eliminar
+  // Modal eliminar
   const [productoEliminar, setProductoEliminar] = useState<Producto | null>(null);
   const [eliminando, setEliminando] = useState(false);
 
@@ -66,24 +94,11 @@ export default function ProductosPage() {
     setLoading(false);
   };
 
-  const cargarCategorias = async () => {
-    // Reutilizamos el endpoint de gastos para obtener categorías de producto
-    // Las categorías vienen de la lista de productos
-    const res = await fetch("/api/productos").then((r) => r.json());
-    // Extraer categorías únicas
-    const cats = Array.from(
-      new Map(
-        (res.productos ?? [])
-          .filter((p: Producto) => p.categoria !== "Sin categoría")
-          .map((p: Producto) => [p.categoria, { id: p.categoria, nombre: p.categoria }])
-      ).values()
-    ) as CategoriaProducto[];
-    setCategorias(cats);
-  };
-
   useEffect(() => {
     cargar();
-    cargarCategorias();
+    fetch("/api/categorias-producto")
+      .then((r) => r.json())
+      .then((d) => setCategorias(d.categorias ?? []));
   }, []);
 
   useEffect(() => {
@@ -104,10 +119,10 @@ export default function ProductosPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           nombre: form.nombre,
+          categoriaId: form.categoriaId || null,
           costoCompra: parseFloat(form.costoCompra),
           precioVenta: parseFloat(form.precioVenta),
           stock: parseInt(form.stock) || 0,
-          descripcion: form.descripcion || undefined,
         }),
       });
       const d = await res.json();
@@ -123,16 +138,17 @@ export default function ProductosPage() {
     }
   };
 
-  // ── Abrir modal editar ───────────────────────────────────────
+  // ── Abrir editar ─────────────────────────────────────────────
   const abrirEditar = (p: Producto) => {
+    // Buscar el id de la categoría por nombre
+    const cat = categorias.find((c) => c.nombre === p.categoria);
     setProductoEditando(p);
     setFormEditar({
       nombre: p.nombre,
       costoCompra: String(p.costoCompra),
       precioVenta: String(p.precioVenta),
       stock: String(p.stock),
-      descripcion: "",
-      categoriaId: "",
+      categoriaId: cat?.id ?? "",
     });
   };
 
@@ -150,6 +166,7 @@ export default function ProductosPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           nombre: formEditar.nombre,
+          categoriaId: formEditar.categoriaId || null,
           costoCompra: parseFloat(formEditar.costoCompra),
           precioVenta: parseFloat(formEditar.precioVenta),
           stock: parseInt(formEditar.stock) || 0,
@@ -172,9 +189,7 @@ export default function ProductosPage() {
     if (!productoEliminar) return;
     setEliminando(true);
     try {
-      const res = await fetch(`/api/productos/${productoEliminar.id}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(`/api/productos/${productoEliminar.id}`, { method: "DELETE" });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error ?? "Error");
       toast.success(`🗑️ "${productoEliminar.nombre}" eliminado`);
@@ -237,6 +252,11 @@ export default function ProductosPage() {
                   className="mt-1"
                 />
               </div>
+              <SelectCategoria
+                categorias={categorias}
+                value={form.categoriaId}
+                onChange={(v) => setForm((f) => ({ ...f, categoriaId: v }))}
+              />
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Costo de Compra (COP) *</Label>
@@ -291,7 +311,7 @@ export default function ProductosPage() {
 
       {/* Tabla */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b flex items-center justify-between">
+        <div className="px-6 py-4 border-b">
           <h3 className="font-semibold text-gray-800">
             Catálogo de Productos
             <span className="text-gray-400 font-normal ml-2 text-sm">({productos.length})</span>
@@ -320,7 +340,15 @@ export default function ProductosPage() {
                 {productos.map((p) => (
                   <tr key={p.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium text-gray-800">{p.nombre}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{p.categoria}</td>
+                    <td className="px-4 py-3">
+                      {p.categoria !== "Sin categoría" ? (
+                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                          {p.categoria}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right text-sm text-gray-600">{formatCOP(p.costoCompra)}</td>
                     <td className="px-4 py-3 text-right text-sm font-semibold text-gray-900">{formatCOP(p.precioVenta)}</td>
                     <td className="px-4 py-3 text-center">
@@ -335,19 +363,17 @@ export default function ProductosPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
-                        {/* Botón Editar */}
                         <button
                           onClick={() => abrirEditar(p)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="Editar producto"
+                          title="Editar"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
-                        {/* Botón Eliminar */}
                         <button
                           onClick={() => setProductoEliminar(p)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                          title="Eliminar producto"
+                          title="Eliminar"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -369,7 +395,10 @@ export default function ProductosPage() {
       </div>
 
       {/* Modal EDITAR */}
-      <Dialog open={!!productoEditando} onOpenChange={(open) => { if (!open) setProductoEditando(null); }}>
+      <Dialog
+        open={!!productoEditando}
+        onOpenChange={(open) => { if (!open) setProductoEditando(null); }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -386,6 +415,11 @@ export default function ProductosPage() {
                 className="mt-1"
               />
             </div>
+            <SelectCategoria
+              categorias={categorias}
+              value={formEditar.categoriaId}
+              onChange={(v) => setFormEditar((f) => ({ ...f, categoriaId: v }))}
+            />
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Costo de Compra (COP) *</Label>
@@ -414,7 +448,10 @@ export default function ProductosPage() {
                 </strong>
                 {" · "}Ganancia:{" "}
                 <strong className="text-green-700">
-                  {formatCOP(parseFloat(formEditar.precioVenta || "0") - parseFloat(formEditar.costoCompra || "0"))}
+                  {formatCOP(
+                    parseFloat(formEditar.precioVenta || "0") -
+                    parseFloat(formEditar.costoCompra || "0")
+                  )}
                 </strong>
               </div>
             )}
@@ -428,11 +465,7 @@ export default function ProductosPage() {
               />
             </div>
             <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setProductoEditando(null)}
-              >
+              <Button variant="outline" className="flex-1" onClick={() => setProductoEditando(null)}>
                 Cancelar
               </Button>
               <Button onClick={guardarEdicion} disabled={guardandoEditar} className="flex-1">
@@ -445,7 +478,10 @@ export default function ProductosPage() {
       </Dialog>
 
       {/* Modal CONFIRMAR ELIMINAR */}
-      <Dialog open={!!productoEliminar} onOpenChange={(open) => { if (!open) setProductoEliminar(null); }}>
+      <Dialog
+        open={!!productoEliminar}
+        onOpenChange={(open) => { if (!open) setProductoEliminar(null); }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-600">
@@ -456,24 +492,20 @@ export default function ProductosPage() {
           <div className="mt-4 space-y-4">
             <div className="bg-red-50 border border-red-200 rounded-lg p-4">
               <p className="text-sm text-gray-700">
-                ¿Estás seguro de que quieres eliminar{" "}
+                ¿Eliminar{" "}
                 <strong className="text-gray-900">"{productoEliminar?.nombre}"</strong>?
               </p>
               <p className="text-xs text-gray-500 mt-2">
-                El producto se desactivará y no aparecerá en el catálogo ni en el POS. El historial de ventas se conserva.
+                El producto se desactiva y no aparece en el catálogo ni en el POS.
+                El historial de ventas se conserva.
               </p>
             </div>
             <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setProductoEliminar(null)}
-              >
+              <Button variant="outline" className="flex-1" onClick={() => setProductoEliminar(null)}>
                 Cancelar
               </Button>
               <Button
-                variant="destructive"
-                className="flex-1"
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
                 onClick={eliminarProducto}
                 disabled={eliminando}
               >
